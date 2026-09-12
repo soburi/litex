@@ -132,9 +132,13 @@ def disabled_handler(name, parm, csr):
     return indent('status = "disabled";\n')
 
 def cpu_handler(name, parm, csr):
-    return indent("clock-frequency = <{}>;\n".format(
-        csr['constants']['config_clock_frequency']
-    ))
+    # CPUs sitting in their own clock domain (e.g. Gowin AE350) export their
+    # frequency separately; the SoC/bus clock only applies to CPUs driven by
+    # sys_clk.
+    constants = csr['constants']
+    frequency = constants.get('config_cpu_clk_freq',
+                              constants['config_clock_frequency'])
+    return indent("clock-frequency = <{}>;\n".format(frequency))
 
 def ram_handler(name, parm, csr):
     mem_reg = {
@@ -308,6 +312,24 @@ def peripheral_handler(name, parm, csr):
     return dtsi
 
 
+def uart_soc_props(name, parm, csr):
+    # LiteX exports the baudrate the UART core was built with; fall back to the
+    # LiteX default for JSON files produced before it was added.
+    baudrate = csr['constants'].get('config_uart_baudrate', 115200)
+    return ['current-speed = <{}>;'.format(baudrate)]
+
+
+def timer_handler(name, parm, csr):
+    dtsi = peripheral_handler(name, parm, csr)
+
+    # The timer counts sys_clk cycles, which is not necessarily the CPU clock,
+    # so report it on the node itself rather than leaving Zephyr to infer it
+    # from /cpus/cpu@0.
+    dtsi += indent("clock-frequency = <{}>;\n".format(
+        csr['constants']['config_clock_frequency']))
+    return dtsi
+
+
 _overlay_handlers = {
     'cpu': {
         'handler': cpu_handler,
@@ -324,10 +346,10 @@ _overlay_handlers = {
         'alias': 'uart0',
         'compatible': 'litex,uart',
         'node': 'serial',
-        'soc_props': ['current-speed = <115200>;'],
+        'soc_props': uart_soc_props,
     },
     'timer0': {
-        'handler': peripheral_handler,
+        'handler': timer_handler,
         'compatible': 'litex,timer0',
         'node': 'timer',
     },
@@ -488,6 +510,8 @@ def _generate_chosen(labels):
         dts += indent('zephyr,shell-uart = &{};\n'.format(uart_label), 2)
     if 'main_ram' in labels:
         dts += indent('zephyr,sram = &{};\n'.format(labels['main_ram']), 2)
+    if 'timer0' in labels:
+        dts += indent('zephyr,system-timer = &{};\n'.format(labels['timer0']), 2)
     if 'prbs0' in labels:
         dts += indent('zephyr,entropy = &{};\n'.format(labels['prbs0']), 2)
 
@@ -537,7 +561,10 @@ def _generate_soc_node(name, parm, csr):
     if node_body:
         dts += indent_all(node_body, 2) + '\n'
 
-    for prop in parm.get('soc_props', []):
+    soc_props = parm.get('soc_props', [])
+    if callable(soc_props):
+        soc_props = soc_props(name, parm, csr)
+    for prop in soc_props:
         dts += indent(prop + '\n', 3)
     dts += dts_status(3)
     dts += indent('};\n', 2)

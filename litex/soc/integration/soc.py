@@ -2274,6 +2274,8 @@ class LiteXSoC(SoC):
         # Add UART.
         self.add_module(name=name, module=uart_core)
 
+        self.add_config(f"{name}_BAUDRATE", baudrate)
+
         if rx_fifo_rx_we:
             self.add_config(f"{name}_RX_FIFO_RX_WE", 1)
 
