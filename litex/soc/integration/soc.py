@@ -3357,6 +3357,9 @@ class LiteXSoC(SoC):
         with_dma_monitor              = False,
         with_dma_status               = False, status_width=32,
         with_dma_table                = True,
+        with_host_window              = False,
+        host_window_origin            = None,
+        host_window_size              = 0x0100_0000,
         with_msi                      = True, msi_type="msi", msi_width=32, msis=None,
         dma_name_prefix               = None,
         msi_name                      = None,
@@ -3375,7 +3378,7 @@ class LiteXSoC(SoC):
         from litepcie.phy.usppciephy import USPPCIEPHY
         from litepcie.core import LitePCIeEndpoint, LitePCIeMSI, LitePCIeMSIMultiVector, LitePCIeMSIX
         from litepcie.frontend.dma import LitePCIeDMA
-        from litepcie.frontend.wishbone import LitePCIeWishboneMaster
+        from litepcie.frontend.wishbone import LitePCIeWishboneMaster, LitePCIeWishboneSlave
 
         # Checks.
         self.check_if_exists(name)
@@ -3406,6 +3409,26 @@ class LiteXSoC(SoC):
         mmap = LitePCIeWishboneMaster(endpoint, base_address=csr_origin)
         self.add_module(name=f"{name}_mmap", module=mmap)
         self.bus.add_master(name=f"{name}_mmap", master=mmap.wishbone)
+
+        # Host Memory Window (Device-initiated accesses to the Host memory).
+        # Exposes a SoC bus region translated to the Host address space, the base being set by
+        # software through the LitePCIeWishboneSlave base CSR. Bulk transfers should use the DMA:
+        # this window issues one 32-bit TLP per access.
+        if with_host_window:
+            if host_window_origin is None:
+                self.logger.error("PCIe {} required with {}.".format(
+                    colorer("host_window_origin"), colorer("with_host_window", color="red")))
+                raise SoCError()
+            self.check_if_exists(f"{name}_host")
+            host = LitePCIeWishboneSlave(endpoint,
+                address_width = address_width,
+                addressing    = self.bus.addressing,
+            )
+            self.add_module(name=f"{name}_host", module=host)
+            self.bus.add_slave(name=f"{name}_host", slave=host.wishbone,
+                region       = SoCRegion(origin=host_window_origin, size=host_window_size, cached=False),
+                strip_origin = True,
+            )
 
         # MSI.
         if with_msi:
