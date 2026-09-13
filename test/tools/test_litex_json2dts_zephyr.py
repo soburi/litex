@@ -2,7 +2,10 @@ import io
 import unittest
 from contextlib import redirect_stdout
 
-from litex.tools.litex_json2dts_zephyr import _overlay_handlers, generate_dts_config
+from litex.tools.litex_json2dts_zephyr import _overlay_handlers, cpu_handler, generate_dts_config
+
+SYS_CLK_FREQ = 100_000_000
+CPU_CLK_FREQ = 800_000_000
 
 
 def csr_with_i2c_instances():
@@ -34,7 +37,7 @@ def csr_with_i2c_instances():
             },
         },
         "constants": {
-            "config_clock_frequency": 100000000,
+            "config_clock_frequency": SYS_CLK_FREQ,
             "config_csr_data_width": 32,
         },
         "memories": {},
@@ -42,6 +45,51 @@ def csr_with_i2c_instances():
 
 
 class TestLiteXJson2DTSZephyr(unittest.TestCase):
+    def test_cpu_node_uses_sys_clk_freq_without_system_clock_node_ref(self):
+        csr = csr_with_i2c_instances()
+        csr["constants"]["config_cpu_clk_freq"] = CPU_CLK_FREQ
+        self.assertEqual(cpu_handler("cpu", {}, csr),
+            "    clock-frequency = <{}>;\n".format(SYS_CLK_FREQ))
+
+    def test_cpu_node_uses_cpu_clk_freq_with_system_clock_node_ref(self):
+        csr = csr_with_i2c_instances()
+        csr["constants"]["config_cpu_system_clock_node_ref"] = "clk_sys"
+        csr["constants"]["config_cpu_clk_freq"] = CPU_CLK_FREQ
+        self.assertEqual(cpu_handler("cpu", {}, csr),
+            "    clock-frequency = <{}>;\n".format(CPU_CLK_FREQ))
+
+    def test_cpu_node_falls_back_to_sys_clk_freq_without_cpu_clk_freq(self):
+        csr = csr_with_i2c_instances()
+        csr["constants"]["config_cpu_system_clock_node_ref"] = "clk_sys"
+        self.assertEqual(cpu_handler("cpu", {}, csr),
+            "    clock-frequency = <{}>;\n".format(SYS_CLK_FREQ))
+
+    def test_system_clock_node_uses_sys_clk_freq(self):
+        for generate_soc_nodes in (False, True):
+            with self.subTest(generate_soc_nodes=generate_soc_nodes):
+                csr = csr_with_i2c_instances()
+                with redirect_stdout(io.StringIO()):
+                    dts_without_ref, _ = generate_dts_config(
+                        csr, _overlay_handlers, generate_soc_nodes=generate_soc_nodes)
+
+                csr["constants"]["config_cpu_system_clock_node_ref"] = "ae350_clk"
+                with redirect_stdout(io.StringIO()):
+                    dts_with_ref, _ = generate_dts_config(
+                        csr, _overlay_handlers, generate_soc_nodes=generate_soc_nodes)
+
+                # The referenced node is appended as-is and nothing else changes.
+                self.assertEqual(dts_with_ref, dts_without_ref +
+                    "&ae350_clk {{\n    clock-frequency = <{}>;\n}};\n".format(SYS_CLK_FREQ))
+
+    def test_no_system_clock_node_without_system_clock_node_ref(self):
+        for generate_soc_nodes in (False, True):
+            with self.subTest(generate_soc_nodes=generate_soc_nodes):
+                with redirect_stdout(io.StringIO()):
+                    dts, _ = generate_dts_config(csr_with_i2c_instances(), _overlay_handlers,
+                        generate_soc_nodes=generate_soc_nodes)
+                # cpu0 always carries a clock-frequency; no other node reference may.
+                self.assertNotRegex(dts, r"(?m)^&(?!cpu0 )\w+ \{\n    clock-frequency = ")
+
     def test_overlay_mode_keeps_fixed_handler_behavior(self):
         with redirect_stdout(io.StringIO()) as output:
             dts, config = generate_dts_config(csr_with_i2c_instances(), _overlay_handlers)
