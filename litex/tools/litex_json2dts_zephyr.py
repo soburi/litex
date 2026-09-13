@@ -85,12 +85,15 @@ def dts_status(levels=1):
 
 def dts_interrupt_parent(name, csr, levels=1):
     if name + '_interrupt' in csr['constants']:
-        return indent("interrupt-parent = <&intc0>;\n", levels)
+        parent = csr['constants'].get('config_cpu_interrupt_parent', 'intc0')
+        return indent("interrupt-parent = <&{}>;\n".format(parent), levels)
     return ""
 
 
 def dts_intr(name, csr, levels=1):
     irq = csr['constants'].get(name + '_interrupt', None)
+    if irq is not None:
+        irq += csr['constants'].get('config_cpu_interrupt_base', 0)
     return indent(f"interrupts = <{irq} 1>;\n" if irq is not None else "", levels)
 
 

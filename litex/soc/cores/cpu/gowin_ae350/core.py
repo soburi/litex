@@ -114,6 +114,7 @@ class GowinAE350(CPU):
     def gcc_flags(self):
         flags  = " -mabi=ilp32 -march=rv32imafdc"
         flags += " -D__AE350__"
+        flags += " -D__riscv_plic__"
         return flags
 
     def __init__(self, platform, variant="standard", *args, **kwargs):
@@ -125,6 +126,10 @@ class GowinAE350(CPU):
         if variant == "linux":
             self.io_regions[0xe400_0000] = 0x0400_0000
         self.reset        = Signal()
+        # SoC IRQs are routed to GP_INT[15:1], reaching the AE350 PLIC on sources 11 to 25
+        # (IRQ_GP1_SOURCE..IRQ_GP15_SOURCE). GP_INT[0] is left unused: its PLIC source (4) sits
+        # apart from that run and the LiteX PLIC support assumes a contiguous range.
+        self.interrupt    = Signal(15)
         self.ibus         = wishbone.Interface(data_width=32, address_width=32, addressing="word")
         self.dbus         = wishbone.Interface(data_width=64, address_width=32, addressing="word")
         self.pbus         = wishbone.Interface(data_width=32, address_width=32, addressing="word")
@@ -179,7 +184,7 @@ class GowinAE350(CPU):
             o_RTC_WAKEUP     = Open(),
 
             # Interrupts.
-            i_GP_INT         = Constant(0, 16),
+            i_GP_INT         = Cat(Constant(0, 1), self.interrupt),
 
             # DMA.
             i_DMA_REQ        = Constant(0, 8),
@@ -355,6 +360,9 @@ class GowinAE350(CPU):
         soc.add_config("CPU_MMU",   "sv32")
         # The machine timer inside the macro counts on the AHB clock, which LiteX drives from sys_clk.
         soc.add_config("CPU_SYSTEM_CLOCK_NODE_REF", "clk_sys")
+        # SoC IRQs drive GP_INT[15:1], which the macro's PLIC sees on sources 11 to 25.
+        soc.add_config("CPU_INTERRUPT_PARENT", "plic0")
+        soc.add_config("CPU_INTERRUPT_BASE",   11)
 
         if self.variant == "linux":
             # These peripherals are internal to the hard CPU, outside the fabric bus.
