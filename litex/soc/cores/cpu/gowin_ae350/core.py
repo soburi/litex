@@ -6,6 +6,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 from migen import *
+from migen.fhdl.specials import Tristate
 
 from litex.gen import *
 
@@ -126,6 +127,7 @@ class GowinAE350(CPU):
         if variant == "linux":
             self.io_regions[0xe400_0000] = 0x0400_0000
         self.reset        = Signal()
+        self.apb_ce       = APB_CE_APB
         # SoC IRQs are routed to GP_INT[15:1], reaching the AE350 PLIC on sources 11 to 25
         # (IRQ_GP1_SOURCE..IRQ_GP15_SOURCE). GP_INT[0] is left unused: its PLIC source (4) sits
         # apart from that run and the LiteX PLIC support assumes a contiguous range.
@@ -172,7 +174,7 @@ class GowinAE350(CPU):
             i_AXI_CE         = 1,
             i_DDR_CE         = 1,
             i_AHB_CE         = 1,
-            i_APB_CE         = Constant(APB_CE_APB, 8),
+            i_APB_CE         = Constant(self.apb_ce, 8),
             i_APB2AHB_CE     = 1,
 
             # WFI.
@@ -396,6 +398,49 @@ class GowinAE350(CPU):
     def set_reset_address(self, reset_address):
         if reset_address != self.reset_address:
             raise ValueError("Gowin AE350 reset address is fixed at 0x80000000.")
+
+    def _enable_apb(self, enable):
+        self.apb_ce |= enable
+        self.cpu_params["i_APB_CE"] = Constant(self.apb_ce, 8)
+
+    def connect_uart2(self, pads):
+        self._enable_apb(APB_CE_UART2)
+        self.cpu_params.update(
+            o_UART2_TXD  = pads.tx,
+            i_UART2_RXD  = pads.rx,
+            # Match the AE350 reference design when modem control is unused.
+            i_UART2_CTSN = 0,
+            i_UART2_DCDN = 0,
+            i_UART2_DSRN = 0,
+            i_UART2_RIN  = 0,
+        )
+
+    def connect_gpio(self, pads):
+        nbits = len(pads)
+        if not 1 <= nbits <= 32:
+            raise ValueError("AE350 GPIO pads must contain between 1 and 32 bits")
+
+        gpio_in   = Signal(32)
+        gpio_out  = Signal(32)
+        gpio_oe_n = Signal(32)
+        pads_in   = Signal(nbits)
+
+        # AE350 GPIO_OE is active-low; Migen's tristate OE is active-high.
+        # Use a vector OE directly since TSTriple provides only one shared OE bit.
+        self.specials += Tristate(
+            pads,
+            gpio_out[:nbits],
+            ~gpio_oe_n[:nbits],
+            pads_in,
+        )
+        self.comb += gpio_in.eq(pads_in if nbits == 32 else Cat(pads_in, Constant(0, 32 - nbits)))
+
+        self._enable_apb(APB_CE_GPIO)
+        self.cpu_params.update(
+            i_GPIO_IN  = gpio_in,
+            o_GPIO_OUT = gpio_out,
+            o_GPIO_OE  = gpio_oe_n,
+        )
 
     def connect_jtag(self, pads):
         self.cpu_params.update(
