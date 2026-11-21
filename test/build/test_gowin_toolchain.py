@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from migen import ClockDomain, Instance
+from migen import ClockDomain, Instance, Signal
 
 from litex.gen import LiteXModule
 from litex.build.generic_platform import IOStandard, Pins
@@ -209,6 +209,31 @@ class TestGowinToolchain(unittest.TestCase):
         self.assertEqual(sdc[-1],
             "set_false_path -from [get_clocks {reference}] -to [get_clocks {system}]")
         self.assertEqual(sum(line.startswith("set_false_path") for line in sdc), 1)
+
+    def test_net_false_paths_preserve_unrelated_paths(self):
+        platform = GowinPlatform("GW5AT-LV60PG484AC1/I0",
+            io=[("clk50", 0, Pins("A1"))], devicename="GW5AT-60B")
+        dut = LiteXModule()
+        dut.cd_sys = ClockDomain("sys")
+        dut.reset_request = Signal()
+        dut.phy_reset = Signal()
+        clk50 = platform.request("clk50")
+        dut.specials += Instance("PLLA", i_CLKIN=clk50, o_CLKOUT0=dut.cd_sys.clk)
+        dut.specials += Instance("CONTROL", o_REQUEST=dut.reset_request, o_RESET=dut.phy_reset)
+        platform.add_period_constraint(clk50, 20, name="reference")
+        platform.add_generated_clock_constraint(dut.cd_sys.clk, clk50, name="system")
+        platform.toolchain.add_false_path_through(dut.reset_request,
+            from_clock=dut.cd_sys.clk, to_clock=clk50)
+        platform.toolchain.add_false_path_through(dut.phy_reset)
+        with tempfile.TemporaryDirectory() as build_dir:
+            platform.build(dut, build_dir=build_dir, build_name="top", run=False)
+            with open(os.path.join(build_dir, "top.sdc")) as f:
+                paths = [line for line in f.read().splitlines() if line.startswith("set_false_path")]
+        self.assertEqual(paths, [
+            "set_false_path -from [get_clocks {system}] -through [get_nets {reset_request}] "
+            "-to [get_clocks {reference}]",
+            "set_false_path -through [get_nets {phy_reset}]",
+        ])
 
     def test_false_paths_accept_explicit_clock_names(self):
         toolchain = gowin.GowinToolchain()

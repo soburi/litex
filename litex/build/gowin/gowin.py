@@ -164,6 +164,7 @@ class GowinToolchain(GenericToolchain):
         self.additional_cst_commands = []
         self.additional_tcl_commands = []
         self.generated_clocks = []
+        self.false_path_nets = []
 
     def finalize(self):
         if self.platform.verilog_include_paths:
@@ -264,8 +265,25 @@ class GowinToolchain(GenericToolchain):
         for from_, to in sorted(self.false_paths, key=lambda p: tuple(clock_name(clk) for clk in p)):
             sdc.append(f"set_false_path -from [get_clocks {{{clock_name(from_)}}}] "
                 f"-to [get_clocks {{{clock_name(to)}}}]")
+        for signal, from_clock, to_clock in self.false_path_nets:
+            command = "set_false_path"
+            if from_clock is not None:
+                command += f" -from [get_clocks {{{clock_name(from_clock)}}}]"
+            command += f" -through [get_nets {{{vns.get_name(signal)}}}]"
+            if to_clock is not None:
+                command += f" -to [get_clocks {{{clock_name(to_clock)}}}]"
+            sdc.append(command)
         tools.write_to_file(f"{self._build_name}.sdc", "\n".join(sdc))
         return (f"{self._build_name}.sdc", "SDC")
+
+    def add_false_path_through(self, signal, from_clock=None, to_clock=None):
+        """Exclude a specific control net, optionally restricted to a clock pair.
+
+        The caller must establish that these paths are asynchronous or inactive
+        in operation; data paths between the clock domains remain constrained.
+        """
+        signal.attr.add("keep")
+        self.false_path_nets.append((signal, from_clock, to_clock))
 
     def add_generated_clock_constraint(self, clk, source, divide_by=1, multiply_by=1, name=None, pin=None, phase=0):
         # Add parent clocks before their derived clocks. With pin, the clock is created on this
