@@ -531,13 +531,17 @@ def _generate_aliases(labels):
     return indent('aliases {\n') + dts + indent('};\n')
 
 
-def _generate_memory_node(csr, overlay_handlers):
+def _generate_memory_node(csr, overlay_handlers, main_ram_label=None):
     if 'main_ram' not in csr.get('memories', {}):
         return ''
 
     label = overlay_handlers['main_ram'].get('alias', 'main_ram')
     base  = csr['memories']['main_ram']['base']
     size  = csr['memories']['main_ram']['size']
+
+    if main_ram_label is not None:
+        return '&{} {{\n'.format(main_ram_label) + indent(
+            'reg = <0x{:x} 0x{:x}>;\n'.format(base, size)) + '};\n'
 
     dts  = indent('{}: memory@{:x} {{\n'.format(label, base))
     dts += indent('device_type = "memory";\n', 2)
@@ -589,7 +593,8 @@ def _generate_code_partition(csr):
         offset, rom['size'] - offset)
 
 
-def generate_soc_nodes_dts_config(csr, overlay_handlers):
+def generate_soc_nodes_dts_config(csr, overlay_handlers, omit_soc_nodes=None, main_ram_label=None):
+    omit_soc_nodes = set(omit_soc_nodes or [])
     dts = ''
     labels = {}
     soc_nodes = []
@@ -604,6 +609,9 @@ def generate_soc_nodes_dts_config(csr, overlay_handlers):
         labels['main_ram'] = overlay_handlers['main_ram'].get('alias', 'main_ram')
 
     for name in csr['csr_bases'].keys():
+        if name in omit_soc_nodes:
+            print('Skipping SoC node:', name)
+            continue
         parm = _get_soc_node_handler(name, overlay_handlers)
         if parm is None:
             print('No SoC node handler for:', name, 'at', hex(csr['csr_bases'][name]))
@@ -615,7 +623,8 @@ def generate_soc_nodes_dts_config(csr, overlay_handlers):
     dts += '/ {\n'
     dts += _generate_chosen(labels)
     dts += _generate_aliases(labels)
-    dts += _generate_memory_node(csr, overlay_handlers)
+    if main_ram_label is None:
+        dts += _generate_memory_node(csr, overlay_handlers)
 
     if soc_nodes:
         dts += _generate_soc_bus_start()
@@ -627,14 +636,17 @@ def generate_soc_nodes_dts_config(csr, overlay_handlers):
         dts += indent('};\n')
 
     dts += '};\n'
+    if main_ram_label is not None:
+        dts += _generate_memory_node(csr, overlay_handlers, main_ram_label)
     dts += _generate_system_clock(csr)
     dts += _generate_code_partition(csr)
     return dts, _generate_config(csr)
 
 
-def generate_dts_config(csr, overlay_handlers, generate_soc_nodes=False):
+def generate_dts_config(csr, overlay_handlers, generate_soc_nodes=False, omit_soc_nodes=None,
+        main_ram_label=None):
     if generate_soc_nodes:
-        return generate_soc_nodes_dts_config(csr, overlay_handlers)
+        return generate_soc_nodes_dts_config(csr, overlay_handlers, omit_soc_nodes, main_ram_label)
 
     dts = cnf = ''
 
@@ -698,6 +710,10 @@ def parse_args():
                             'Generate real /soc nodes instead of patching '
                             'existing Zephyr labels'
                         ))
+    parser.add_argument('--omit-soc-node', action='append', default=[],
+                        help='Skip a CSR peripheral when generating /soc nodes (repeatable)')
+    parser.add_argument('--main-ram-label',
+                        help='Update an existing memory node instead of generating a new one')
     return parser.parse_args()
 
 
@@ -706,7 +722,8 @@ def main():
 
     with open(args.conf_file) as f:
         csr = json.load(f)
-    dts, config = generate_dts_config(csr, _overlay_handlers, args.generate_soc_nodes)
+    dts, config = generate_dts_config(
+        csr, _overlay_handlers, args.generate_soc_nodes, args.omit_soc_node, args.main_ram_label)
 
     print_or_save(args.dts, dts)
     print_or_save(args.config, config)

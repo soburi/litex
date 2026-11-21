@@ -171,6 +171,27 @@ class TestLiteXJson2DTSZephyr(unittest.TestCase):
         self.assertNotIn("No SoC node handler for: i2c2", output.getvalue())
         self.assertEqual(config, "")
 
+    def test_soc_node_mode_omits_requested_nodes(self):
+        with redirect_stdout(io.StringIO()) as output:
+            dts, _ = generate_dts_config(csr_with_i2c_instances(), _overlay_handlers,
+                generate_soc_nodes=True, omit_soc_nodes=["i2c2"])
+
+        self.assertIn("i2c0: i2c@e0004000 {", dts)
+        self.assertNotIn("i2c@e0005000", dts)
+        self.assertIn("Skipping SoC node: i2c2", output.getvalue())
+
+    def test_soc_node_mode_updates_an_existing_memory_node(self):
+        csr = csr_with_i2c_instances()
+        csr["memories"]["main_ram"] = {"base": 0x40000000, "size": 0x10000000}
+        with redirect_stdout(io.StringIO()):
+            generated, _ = generate_dts_config(csr, _overlay_handlers, generate_soc_nodes=True)
+            updated, _ = generate_dts_config(csr, _overlay_handlers, generate_soc_nodes=True,
+                main_ram_label="dram")
+
+        self.assertIn("memory@40000000 {", generated)
+        self.assertNotIn("memory@40000000", updated)
+        self.assertIn("&dram {\n    reg = <0x40000000 0x10000000>;\n};\n", updated)
+
 
 if __name__ == "__main__":
     unittest.main()
