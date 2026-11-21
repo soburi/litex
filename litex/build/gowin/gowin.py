@@ -247,12 +247,13 @@ class GowinToolchain(GenericToolchain):
                 name = vns.get_name(clk)
             clock_names[clk] = name
             sdc.append(f"create_clock -name {name} -period {period} {clock_object(clk)}")
-        for clk, source, divide_by, multiply_by, name, pin in self.generated_clocks:
+        for clk, source, divide_by, multiply_by, name, pin, phase in self.generated_clocks:
             name   = vns.get_name(clk) if name is None else name
             target = clock_object(clk) if pin is None else f"[get_pins {{{pin}}}]"
             clock_names[clk] = name
             sdc.append(f"create_generated_clock -name {name} -source {clock_object(source)} "
-                f"-divide_by {divide_by} -multiply_by {multiply_by} {target}")
+                f"-divide_by {divide_by} -multiply_by {multiply_by}" +
+                (f" -phase {phase:g}" if phase else "") + f" {target}")
 
         # False paths refer to clock names, including explicitly named generated clocks.
         def clock_name(clk):
@@ -266,7 +267,7 @@ class GowinToolchain(GenericToolchain):
         tools.write_to_file(f"{self._build_name}.sdc", "\n".join(sdc))
         return (f"{self._build_name}.sdc", "SDC")
 
-    def add_generated_clock_constraint(self, clk, source, divide_by=1, multiply_by=1, name=None, pin=None):
+    def add_generated_clock_constraint(self, clk, source, divide_by=1, multiply_by=1, name=None, pin=None, phase=0):
         # Add parent clocks before their derived clocks. With pin, the clock is created on this
         # primitive pin (ex: "pll/CLKOUT0": Gowin doesn't accept PLL outputs nets as clock objects)
         # and named after clk (false paths can then refer to clk).
@@ -274,7 +275,7 @@ class GowinToolchain(GenericToolchain):
             raise ValueError("Generated clock factors must be positive integers.")
         clk.attr.add("keep")
         source.attr.add("keep")
-        self.generated_clocks.append((clk, source, divide_by, multiply_by, name, pin))
+        self.generated_clocks.append((clk, source, divide_by, multiply_by, name, pin, phase))
 
     # Project (tcl) --------------------------------------------------------------------------------
 

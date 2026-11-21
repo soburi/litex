@@ -134,6 +134,32 @@ class TestGowinToolchain(unittest.TestCase):
             self.assertAlmostEqual(24e6*m/d, freq)
         self.assertIn("set_false_path -from [get_clocks {usb_clk}] -to [get_clocks {usb_960_clk}]", sdc)
 
+    def test_gw5_phase_constraint_matches_pll_programming(self):
+        from litex.soc.cores.clock.gowin_gw5a import GW5APLL
+        platform = GowinPlatform("GW5AST-LV138FPG676AES",
+            io=[("clk50", 0, Pins("A1"))], devicename="GW5AST-138B")
+        dut = LiteXModule()
+        dut.cd_fast = ClockDomain("fast")
+        dut.cd_cpu = ClockDomain("cpu")
+        dut.cd_init = ClockDomain("init")
+        clk50 = platform.request("clk50")
+        dut.pll = pll = GW5APLL(platform.devicename, platform.device, name="main_pll")
+        pll.register_clkin(clk50, 50e6)
+        pll.create_clkout(dut.cd_fast, 100e6, with_reset=False)
+        pll.create_clkout(dut.cd_cpu, 800e6, with_reset=False)
+        pll.create_clkout(dut.cd_init, 50e6, phase=90)
+        platform.add_period_constraint(clk50, 20)
+        pll.add_generated_clock_constraints(platform)
+        with tempfile.TemporaryDirectory() as build_dir:
+            platform.build(dut, build_dir=build_dir, build_name="top", run=False)
+            with open(os.path.join(build_dir, "top.sdc")) as f:
+                sdc = f.read().splitlines()
+        init_clock = next(line for line in sdc if line.endswith("[get_pins {main_pll/CLKOUT2}]"))
+        self.assertIn(" -phase 90 ", init_clock)
+        self.assertEqual(pll.params["p_ODIV2_SEL"], 16)
+        self.assertEqual(pll.params["p_CLKOUT2_PE_COARSE"], 4)
+        self.assertEqual(pll.params["p_CLKOUT2_PE_FINE"], 0)
+
     def test_generated_clock_on_pin_requires_pll_name(self):
         from litex.soc.cores.clock.gowin_gw5a import GW5APLL
         platform = GowinPlatform("GW5A-LV25UG324C2/I1",

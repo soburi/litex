@@ -100,6 +100,7 @@ class GW5APLL(LiteXModule):
                 divide_by   = config["idiv"]*config[f"odiv{n}"],
                 multiply_by = config["fdiv"]*config["mdiv"],
                 pin         = f"{self.name}/CLKOUT{n}",
+                phase       = self.clkouts[n].phase,
             )
 
     def compute_config(self):
