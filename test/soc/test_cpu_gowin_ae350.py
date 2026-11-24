@@ -4,6 +4,7 @@
 # Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
 # SPDX-License-Identifier: BSD-2-Clause
 
+import argparse
 import unittest
 
 from migen import Record, Signal
@@ -12,8 +13,9 @@ from migen.fhdl.structure import _Assign, _Slice
 from litex.gen import Open
 
 from litex.build.gowin import GowinPlatform
+from litex.soc.interconnect import wishbone
 from litex.soc.integration.soc import SoCCore, SoCRegion, SoCError
-from litex.soc.cores.cpu.gowin_ae350.core import APB_CE_APB, APB_CE_GPIO, APB_CE_UART1, APB_CE_UART2
+from litex.soc.cores.cpu.gowin_ae350.core import GowinAE350, APB_CE_APB, APB_CE_GPIO, APB_CE_UART1, APB_CE_UART2
 
 
 class TestGowinAE350(unittest.TestCase):
@@ -186,6 +188,56 @@ class TestGowinAE350(unittest.TestCase):
         mac = soc.bus.regions["ethmac"]
         self.assertGreaterEqual(mac.origin, csr.origin + csr.size)
         self.assertLessEqual(mac.origin + mac.size, 0xf000_0000)
+
+    def make_dlm_soc(self, **kwargs):
+        GowinAE350.use_dlm = True
+        self.addCleanup(setattr, GowinAE350, "use_dlm", False)
+        return self.make_soc(integrated_sram_size=0, **kwargs)
+
+    def test_dlm_args(self):
+        for argv, use_dlm in [([], False), (["--use-dlm"], True)]:
+            with self.subTest(argv=argv):
+                self.addCleanup(setattr, GowinAE350, "use_dlm", False)
+                parser = argparse.ArgumentParser()
+                GowinAE350.args_fill(parser)
+                args = parser.parse_args(argv)
+                args.integrated_sram_size = 0x2000
+                GowinAE350.args_read(args)
+                self.assertEqual(GowinAE350.use_dlm, use_dlm)
+                self.assertEqual(args.integrated_sram_size, 0 if use_dlm else 0x2000)
+
+    def test_default_uses_fabric_sram(self):
+        soc = self.make_soc()
+        self.assertIn("sram", soc.bus.slaves)
+        self.assertNotIn("__AE350_USE_DLM__", soc.cpu.gcc_flags)
+        self.assertIn("CONFIG_CPU_HAS_INTERRUPT", soc.constants)
+        self.assertNotIn("UART_POLLING", soc.constants)
+        soc.finalize()
+
+    def test_dlm_sram(self):
+        soc = self.make_dlm_soc()
+        region = soc.bus.regions["sram"]
+        self.assertEqual((region.origin, region.size), (0xa020_0000, 0x10000))
+        self.assertTrue(region.linker)
+        self.assertNotIn("sram", soc.bus.slaves)
+        self.assertIn("-D__AE350_USE_DLM__", soc.cpu.gcc_flags)
+        self.assertNotIn("CONFIG_CPU_HAS_INTERRUPT", soc.constants)
+        self.assertIn("UART_POLLING", soc.constants)
+        soc.finalize()
+
+    def test_dlm_rejects_storage_dma(self):
+        # The BIOS gives these DMAs buffers in its data/stack, which fabric masters cannot reach.
+        for name in ["sdcard_block2mem", "sdcard_mem2block", "sata_sector2mem", "sata_mem2sector"]:
+            with self.subTest(name=name):
+                soc = self.make_dlm_soc()
+                soc.bus.add_master(name=name, master=wishbone.Interface(data_width=32, address_width=32, addressing="byte"))
+                with self.assertRaisesRegex(ValueError, f"DLM.*{name}"):
+                    soc.finalize()
+
+    def test_storage_dma_without_dlm(self):
+        soc = self.make_soc()
+        soc.bus.add_master(name="sdcard_block2mem", master=wishbone.Interface(data_width=32, address_width=32, addressing="byte"))
+        soc.finalize()
 
 
 if __name__ == "__main__":

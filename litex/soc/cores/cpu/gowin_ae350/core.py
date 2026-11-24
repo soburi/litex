@@ -366,6 +366,8 @@ class GowinAE350(CPU):
         # SDRAM is added after CPU setup; retain the dictionaries to use its final region and L2 size.
         self.soc_regions   = soc.bus.regions
         self.soc_constants = soc.constants
+        # Storage DMA masters are added after CPU setup; resolve the buses at finalization.
+        self.soc_dma_masters = lambda: {**soc.bus.masters, **getattr(soc, "dma_bus", soc.bus).masters}
 
         if self.use_dlm:
             # Use the internal DLM as the BIOS's SRAM, without a fabric bus slave.
@@ -478,6 +480,15 @@ class GowinAE350(CPU):
             raise ValueError(
                 "AE350 native memory bypasses the fabric L2; use --l2-size=0 to keep "
                 "CPU and other fabric masters consistent.")
+        if self.use_dlm:
+            # The BIOS hands its own buffers to these DMAs, but fabric masters cannot reach the DLM.
+            dma_masters = [name for name in self.soc_dma_masters()
+                if name.endswith(("_block2mem", "_mem2block", "_sector2mem", "_mem2sector"))]
+            if dma_masters:
+                raise ValueError(
+                    "AE350 DLM is not reachable from fabric DMA masters ({}); BIOS buffers would be "
+                    "placed in it. Remove --use-dlm or the DMA-based storage core.".format(
+                    ", ".join(sorted(dma_masters))))
         if not hasattr(self, "ram_bridge"):
             self.ram_bridge = ahb.AHB2Wishbone(self.ahb_ram, self.dbus)
         self.specials += Instance("AE350_SOC", **self.cpu_params)
